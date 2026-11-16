@@ -154,6 +154,7 @@ class Observer:
         self.repair_watch_running = True
         self.last_durability_notice = 0
         self.repair_in_progress = False
+        self.repair_blocked = False
         self.repair_cancel = threading.Event()
         self.tunnel_active = False
         self.tunnel_thread = None
@@ -506,6 +507,7 @@ class Observer:
             "а вторая рука пустая. Программа бросит до 4 бутылочек из каждого слота 6–9. Начать?"
         ):
             return
+        self.repair_cancel.clear()
         threading.Thread(target=self.repair_pickaxe, daemon=True).start()
 
     def repair_pickaxe(self):
@@ -515,7 +517,6 @@ class Observer:
                 return
         self.repair_in_progress = True
         self._repair_reserved = False
-        self.repair_cancel.clear()
         was_mining = self.mine_active
         was_forward = self.forward_active
         swapped = False
@@ -571,15 +572,22 @@ class Observer:
                 self.root.after(0, lambda d=durability: self.repair_status.set(
                     f"После починки оценка прочности: {d}%"))
                 if durability > 20:
+                    self.repair_blocked = False
                     if was_forward:
                         self.toggle_forward()
                     if was_mining:
                         self.toggle_mine()
                     self.set_status("Починка завершена; прежние действия возобновлены.")
                 else:
-                    self.set_status("Прочность всё ещё низкая. Движение и копание оставлены выключенными.")
+                    self.repair_blocked = True
+                    if self.tunnel_active:
+                        self.stop_auto_tunnel()
+                    self.set_status("Прочность всё ещё ниже 20%. Авто-туннель остановлен; проверь кирку и повтори ремонт.")
             else:
-                self.set_status("Не удалось проверить прочность после починки. Движение не возобновлено.")
+                self.repair_blocked = True
+                if self.tunnel_active:
+                    self.stop_auto_tunnel()
+                self.set_status("Не удалось проверить прочность после ремонта. Авто-туннель остановлен для безопасности.")
         except Exception as exc:
             self.set_status("Починка выполнена, но проверка прочности не удалась: " + str(exc)[:120])
 
@@ -596,6 +604,7 @@ class Observer:
                                 if durability <= 20 and not self.repair_in_progress:
                                     self.repair_in_progress = True
                                     self._repair_reserved = True
+                                    self.repair_cancel.clear()
                                     threading.Thread(target=self.repair_pickaxe, daemon=True).start()
                             else:
                                 self.root.after(0, lambda: self.repair_status.set(
@@ -714,6 +723,8 @@ class Observer:
                 if not first_block:
                     raise RuntimeError("F3 виден, но Targeted Block не распознан. Наведи прицел точно на блок и проверь правую колонку F3.")
                 while self.tunnel_active and not self.tunnel_stop.is_set():
+                    if self.repair_blocked:
+                        raise RuntimeError("Авто-туннель заблокирован: ремонт не подтвердил прочность выше 20%. Проверь кирку вручную.")
                     if self.repair_in_progress:
                         # Do not restart movement/mining while the repair worker is handling inventory.
                         send_w_key(key_up=True)
