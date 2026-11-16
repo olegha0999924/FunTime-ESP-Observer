@@ -155,6 +155,7 @@ class Observer:
         self.last_durability_notice = 0
         self.repair_in_progress = False
         self.repair_blocked = False
+        self.minecraft_gui_scale = self.read_minecraft_gui_scale()
         self.repair_cancel = threading.Event()
         self.tunnel_active = False
         self.tunnel_thread = None
@@ -465,20 +466,44 @@ class Observer:
                  if self.repair_watch_enabled else "Контроль прочности выключен")
         self.root.after(0, lambda: self.repair_status.set(value))
 
+    def read_minecraft_gui_scale(self):
+        """Read guiScale from common Minecraft game directories; default to 2."""
+        candidates = []
+        appdata = os.environ.get("APPDATA")
+        if appdata:
+            candidates.append(Path(appdata) / ".minecraft" / "options.txt")
+        candidates.extend([
+            Path("C:/Games/Minecraft/options.txt"),
+            Path.home() / "Games" / "Minecraft" / "options.txt",
+        ])
+        for options_path in candidates:
+            try:
+                if not options_path.is_file():
+                    continue
+                match = re.search(r"(?m)^guiScale:(\d+)\s*$", options_path.read_text(encoding="utf-8", errors="ignore"))
+                if match:
+                    value = int(match.group(1))
+                    if 1 <= value <= 4:
+                        return value
+                    # guiScale=0 means Auto; use the safe common estimate.
+                    return 2
+            except OSError:
+                continue
+        return 2
+
     def read_pickaxe_durability(self, sct):
-        """Estimate slot-2 durability using a resolution-relative hotbar crop."""
+        """Estimate slot-2 durability using the configured Minecraft GUI scale."""
         monitor = sct.monitors[1]
         width, height = int(monitor["width"]), int(monitor["height"])
-        scale = width / 1920.0
-        # Slot 2 is the second hotbar cell from the left of center.
-        # Minecraft's standard hotbar cell spacing is about 20 scaled pixels;
-        # the durability bar is centered under the item icon.
-        slot2_center_x = monitor["left"] + width / 2 - 60 * scale
+        pixel_scale = (width / 1920.0) * max(1, min(4, int(self.minecraft_gui_scale)))
+        # Each hotbar slot is 20 GUI pixels. Slot 2 is three slots left of center.
+        # Apply GUI scale as well as display resolution; ignoring guiScale misreads slot 3/4.
+        slot2_center_x = monitor["left"] + width / 2 - 60 * pixel_scale
         region = {
-            "left": int(slot2_center_x - 18 * scale),
-            "top": int(monitor["top"] + height - 25 * scale),
-            "width": max(24, int(36 * scale)),
-            "height": max(8, int(16 * scale)),
+            "left": int(slot2_center_x - 18 * pixel_scale),
+            "top": int(monitor["top"] + height - 25 * pixel_scale),
+            "width": max(24, int(36 * pixel_scale)),
+            "height": max(8, int(16 * pixel_scale)),
         }
         shot = np.array(sct.grab(region))
         hsv = cv2.cvtColor(shot[:, :, :3], cv2.COLOR_BGR2HSV)
@@ -489,11 +514,11 @@ class Observer:
         for row in mask:
             xs = np.where(row)[0]
             if len(xs) >= 2:
-                # Use the longest continuous run; ignore scattered UI pixels.
                 splits = np.where(np.diff(xs) > 2)[0] + 1
                 groups = np.split(xs, splits)
                 best = max(best, max((int(g[-1] - g[0] + 1) for g in groups if len(g) >= 2), default=0))
-        expected = max(5, 26 * scale)
+        # Minecraft's durability texture is 13 pixels wide at GUI scale 1.
+        expected = max(5, 13 * pixel_scale)
         if best < max(3, int(expected * 0.08)):
             return None
         return max(0, min(100, round(best / expected * 100)))
