@@ -499,11 +499,11 @@ class Observer:
             txt = pytesseract.image_to_string(
                 gray, config="--psm 6 -c tessedit_char_whitelist=XYZxyz0123456789-+.,/: "
             )
-            number = r"[-+]?\\d{1,7}(?:[.,]\\d+)?"
+            number = r"[-+]?\d{1,7}(?:[.,]\d+)?"
             patterns = [
-                rf"XYZ\\s*:?\\s*({number})\\s*[/, ]+\\s*({number})\\s*[/, ]+\\s*({number})",
-                rf"({number})\\s*/\\s*({number})\\s*/\\s*({number})",
-                rf"({number})\\s*,\\s*({number})\\s*,\\s*({number})",
+                rf"XYZ\s*:?\s*({number})\s*[/, ]+\s*({number})\s*[/, ]+\s*({number})",
+                rf"({number})\s*/\s*({number})\s*/\s*({number})",
+                rf"({number})\s*,\s*({number})\s*,\s*({number})",
             ]
             for pattern in patterns:
                 match = re.search(pattern, txt, re.IGNORECASE)
