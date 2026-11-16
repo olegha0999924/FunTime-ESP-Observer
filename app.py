@@ -352,8 +352,15 @@ class Observer:
                 frame = cv2.cvtColor(np.array(sct.grab(monitor)), cv2.COLOR_BGRA2BGR)
                 result = self.coords(frame)
                 pressed_f3 = False
-                # Не переключаем F3, если координаты уже видны: так не выключим готовый экран отладки.
-                if not result.startswith("X="):
+                # Проверяем наличие самого F3-оверлея отдельно от успешного чтения XYZ.
+                top_left = frame[:int(frame.shape[0] * .72), :int(frame.shape[1] * .62)]
+                overlay_text = pytesseract.image_to_string(
+                    cv2.cvtColor(top_left, cv2.COLOR_BGR2GRAY),
+                    config="--psm 6"
+                )
+                f3_visible = bool(re.search(r"\\b(XYZ|Facing|Block|Chunk)\\b", overlay_text, re.IGNORECASE))
+                # Не нажимаем F3 повторно, если отладочный экран уже открыт.
+                if not result.startswith("X=") and not f3_visible:
                     send_f3_key(False)
                     time.sleep(0.12)
                     send_f3_key(True)
