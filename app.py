@@ -490,18 +490,37 @@ class Observer:
             return "Tesseract OCR не найден. Установи его или добавь в PATH."
         try:
             h, w = frame.shape[:2]
-            crop = frame[:int(h * .28), :int(w * .42)]
+            # Сканируем левую часть экрана, где обычно находятся F3/координатные оверлеи.
+            crop = frame[:int(h * .72), :int(w * .62)]
             gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
             gray = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
-            txt = pytesseract.image_to_string(gray, config="--psm 6")
-            match = re.search(
-                r"(-?\d{1,7})\s*[, ]+\s*(-?\d{1,7})\s*[, ]+\s*(-?\d{1,7})",
-                txt
+            gray = cv2.convertScaleAbs(gray, alpha=1.6, beta=15)
+            # Сначала пробуем стандартный формат Minecraft F3: XYZ: x / y / z.
+            txt = pytesseract.image_to_string(
+                gray, config="--psm 6 -c tessedit_char_whitelist=XYZxyz0123456789-+.,/: "
             )
-            return (
-                f"X={match.group(1)}, Y={match.group(2)}, Z={match.group(3)}"
-                if match else "Координаты не распознаны: проверь отображение координат в игре"
+            number = r"[-+]?\\d{1,7}(?:[.,]\\d+)?"
+            patterns = [
+                rf"XYZ\\s*:?\\s*({number})\\s*[/, ]+\\s*({number})\\s*[/, ]+\\s*({number})",
+                rf"({number})\\s*/\\s*({number})\\s*/\\s*({number})",
+                rf"({number})\\s*,\\s*({number})\\s*,\\s*({number})",
+            ]
+            for pattern in patterns:
+                match = re.search(pattern, txt, re.IGNORECASE)
+                if match:
+                    values = [part.replace(",", ".") for part in match.groups()]
+                    return f"X={values[0]}, Y={values[1]}, Z={values[2]}"
+            # Второй проход с бинаризацией помогает при тонком/полупрозрачном HUD-тексте.
+            _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            txt2 = pytesseract.image_to_string(
+                binary, config="--psm 11 -c tessedit_char_whitelist=XYZxyz0123456789-+.,/: "
             )
+            for pattern in patterns:
+                match = re.search(pattern, txt2, re.IGNORECASE)
+                if match:
+                    values = [part.replace(",", ".") for part in match.groups()]
+                    return f"X={values[0]}, Y={values[1]}, Z={values[2]}"
+            return "Координаты не распознаны. Включи отображение XYZ/координат на экране (или F3) и проверь, что они видны."
         except pytesseract.pytesseract.TesseractNotFoundError:
             return "Tesseract OCR не найден по пути: " + str(TESSERACT_PATH)
         except Exception as exc:
