@@ -4,3 +4,4 @@ numpy
 pytesseract
 Pillow
 requests
+pynput
