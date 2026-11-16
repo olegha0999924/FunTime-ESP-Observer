@@ -42,12 +42,18 @@ class INPUT(ctypes.Structure):
 
 def send_w_key(key_up=False):
     flags = 0x0002 if key_up else 0
-    event = INPUT(type=1, ki=KEYBDINPUT(
+    event = INPUT()
+    event.type = 1  # INPUT_KEYBOARD
+    event.ki = KEYBDINPUT(
         wVk=0x57, wScan=0, dwFlags=flags, time=0, dwExtraInfo=0
-    ))
-    sent = ctypes.windll.user32.SendInput(1, ctypes.byref(event), ctypes.sizeof(INPUT))
+    )
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    user32.SendInput.argtypes = (wintypes.UINT, ctypes.POINTER(INPUT), ctypes.c_int)
+    user32.SendInput.restype = wintypes.UINT
+    sent = user32.SendInput(1, ctypes.byref(event), ctypes.sizeof(INPUT))
     if sent != 1:
-        raise ctypes.WinError(ctypes.get_last_error())
+        error = ctypes.get_last_error()
+        raise OSError(error, ctypes.FormatError(error) if error else "SendInput не принял событие")
 CAPTURES.mkdir(exist_ok=True)
 
 
@@ -188,7 +194,9 @@ class Observer:
             self.forward_active = True
             self.root.after(0, lambda: self.move_status.set("Движение включено: удерживается W"))
         except Exception as exc:
-            self.set_status("Не удалось включить движение: " + str(exc)[:150])
+            message = "Ошибка F6: " + str(exc)[:140]
+            self.root.after(0, lambda value=message: self.move_status.set(value))
+            self.set_status(message)
 
     def stop_forward(self):
         try:
