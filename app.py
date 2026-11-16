@@ -118,6 +118,18 @@ def send_f3_key(key_up=False):
     send_input(1, KEYBDINPUT(
         wVk=0x72, wScan=0, dwFlags=flags, time=0, dwExtraInfo=0
     ))
+
+
+def tap_key(vk):
+    send_input(1, KEYBDINPUT(wVk=vk, wScan=0, dwFlags=0, time=0, dwExtraInfo=0))
+    time.sleep(0.04)
+    send_input(1, KEYBDINPUT(wVk=vk, wScan=0, dwFlags=0x0002, time=0, dwExtraInfo=0))
+
+
+def right_click_once():
+    send_input(0, MOUSEINPUT(dx=0, dy=0, mouseData=0, dwFlags=0x0008, time=0, dwExtraInfo=0))
+    time.sleep(0.06)
+    send_input(0, MOUSEINPUT(dx=0, dy=0, mouseData=0, dwFlags=0x0010, time=0, dwExtraInfo=0))
 CAPTURES.mkdir(exist_ok=True)
 
 
@@ -140,6 +152,8 @@ class Observer:
         self.repair_watch_enabled = True
         self.repair_watch_running = True
         self.last_durability_notice = 0
+        self.repair_in_progress = False
+        self.repair_cancel = threading.Event()
         self.hotkey_listener = keyboard.GlobalHotKeys({
             "<f6>": self.toggle_forward,
             "<f7>": self.toggle_mine,
@@ -184,7 +198,7 @@ class Observer:
         movement.pack(fill="x", pady=6)
         ttk.Label(
             movement,
-            text="F6 — идти вперёд (W), F7 — удерживать ЛКМ, F8 — отпустить W и ЛКМ, F9 — контроль прочности. Кирка должна быть во втором слоте хотбара.",
+            text="F6 — идти вперёд, F7 — копать, F8 — аварийная остановка, F9 — контроль прочности. Кирка: слот 2; лопата: 3; пузырьки: 6–9. Для починки вторая рука должна быть пустой.",
             wraplength=500
         ).pack(anchor="w")
         self.move_status = tk.StringVar(value="Движение выключено")
@@ -197,6 +211,7 @@ class Observer:
         ttk.Label(movement, textvariable=self.repair_status, wraplength=500).pack(anchor="w", pady=(4, 0))
         ttk.Button(movement, text="Найти окно Minecraft", command=self.refresh_game_window).pack(anchor="w", pady=(5, 0))
         ttk.Button(movement, text="Включить F3 и проверить XYZ", command=self.check_coordinates).pack(anchor="w", pady=(5, 0))
+        ttk.Button(movement, text="Починить кирку сейчас (тест)", command=self.start_manual_repair).pack(anchor="w", pady=(5, 0))
 
         buttons = ttk.Frame(f)
         buttons.pack(anchor="w", pady=10)
@@ -458,26 +473,106 @@ class Observer:
             return None
         return max(0, min(100, round(best / 26 * 100)))
 
+    def start_manual_repair(self):
+        if self.repair_in_progress:
+            return
+        if not messagebox.askyesno(
+            "Проверка раскладки",
+            "Убедись, что кирка с Починкой находится в слоте 2, слоты 6–9 содержат бутылочки опыта, "
+            "а вторая рука пустая. Программа бросит до 4 бутылочек из каждого слота 6–9. Начать?"
+        ):
+            return
+        threading.Thread(target=self.repair_pickaxe, daemon=True).start()
+
+    def repair_pickaxe(self):
+        if self.repair_in_progress:
+            # Watcher may reserve the flag immediately before starting this worker.
+            if not getattr(self, "_repair_reserved", False):
+                return
+        self.repair_in_progress = True
+        self._repair_reserved = False
+        self.repair_cancel.clear()
+        was_mining = self.mine_active
+        was_forward = self.forward_active
+        swapped = False
+        try:
+            self.stop_mine()
+            self.stop_forward()
+            self.root.after(0, lambda: self.repair_status.set("Починка: перемещаю кирку во вторую руку…"))
+            time.sleep(0.3)
+            # Слот 2 выбран: F меняет кирку с пустой второй рукой.
+            tap_key(0x32)
+            time.sleep(0.15)
+            tap_key(0x46)
+            swapped = True
+            time.sleep(0.25)
+            thrown = 0
+            # По 4 отдельных броска на каждый из слотов 6–9; не удерживаем ПКМ,
+            # чтобы не выбросить целые стаки.
+            for slot in (6, 7, 8, 9):
+                if self.repair_cancel.is_set():
+                    break
+                tap_key(0x30 + slot)
+                time.sleep(0.12)
+                for _ in range(4):
+                    if self.repair_cancel.is_set():
+                        break
+                    right_click_once()
+                    thrown += 1
+                    time.sleep(0.38)
+            self.root.after(0, lambda n=thrown: self.repair_status.set(
+                f"Брошено бутылочек: {n}. Жду подбора сфер опыта…"))
+            time.sleep(3.0)
+        except Exception as exc:
+            self.set_status("Ошибка автоматической починки: " + str(exc)[:160])
+        finally:
+            # Всегда пытаемся вернуть кирку в слот 2, даже при отмене/ошибке.
+            if swapped:
+                try:
+                    tap_key(0x32)
+                    time.sleep(0.15)
+                    tap_key(0x46)
+                    time.sleep(0.2)
+                except Exception as exc:
+                    self.set_status("Не удалось вернуть кирку во вторую руку/слот 2: " + str(exc)[:120])
+            self.repair_in_progress = False
+
+        if self.repair_cancel.is_set():
+            self.root.after(0, lambda: self.repair_status.set("Починка отменена. Проверь расположение кирки вручную."))
+            return
+        try:
+            with mss.mss() as sct:
+                durability = self.read_pickaxe_durability(sct)
+            if durability is not None:
+                self.root.after(0, lambda d=durability: self.repair_status.set(
+                    f"После починки оценка прочности: {d}%"))
+                if durability > 20:
+                    if was_forward:
+                        self.toggle_forward()
+                    if was_mining:
+                        self.toggle_mine()
+                    self.set_status("Починка завершена; прежние действия возобновлены.")
+                else:
+                    self.set_status("Прочность всё ещё низкая. Движение и копание оставлены выключенными.")
+            else:
+                self.set_status("Не удалось проверить прочность после починки. Движение не возобновлено.")
+        except Exception as exc:
+            self.set_status("Починка выполнена, но проверка прочности не удалась: " + str(exc)[:120])
+
     def repair_watch_loop(self):
         try:
             with mss.mss() as sct:
                 while self.repair_watch_running:
-                    if self.repair_watch_enabled and self.mine_active:
+                    if self.repair_watch_enabled and self.mine_active and not self.repair_in_progress:
                         try:
                             durability = self.read_pickaxe_durability(sct)
                             if durability is not None:
                                 self.root.after(0, lambda d=durability: self.repair_status.set(
                                     f"Прочность кирки (оценка): {d}%"))
-                                if durability <= 20:
-                                    self.stop_mine()
-                                    now = time.time()
-                                    if now - self.last_durability_notice > 10:
-                                        self.last_durability_notice = now
-                                        self.root.after(0, lambda: messagebox.showwarning(
-                                            "Кирка почти сломалась",
-                                            "Копание остановлено: прочность примерно 20% или ниже. "
-                                            "Автоматическое использование пузырьков опыта пока не включено."
-                                        ))
+                                if durability <= 20 and not self.repair_in_progress:
+                                    self.repair_in_progress = True
+                                    self._repair_reserved = True
+                                    threading.Thread(target=self.repair_pickaxe, daemon=True).start()
                             else:
                                 self.root.after(0, lambda: self.repair_status.set(
                                     "Полоска прочности не распознана; контроль ожидает изображения"))
@@ -488,6 +583,7 @@ class Observer:
             return
 
     def stop_all(self):
+        self.repair_cancel.set()
         self.stop_forward()
         self.stop_mine()
 
