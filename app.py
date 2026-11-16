@@ -213,7 +213,7 @@ class Observer:
         ttk.Label(movement, textvariable=self.mine_status).pack(anchor="w", pady=(2, 0))
         self.game_window_status = tk.StringVar(value="Проверяю окно Minecraft…")
         ttk.Label(movement, textvariable=self.game_window_status).pack(anchor="w", pady=(4, 0))
-        self.repair_status = tk.StringVar(value="Контроль прочности включён: порог остановки 20%")
+        self.repair_status = tk.StringVar(value=f"Контроль прочности включён: порог 20%; GUI scale {self.minecraft_gui_scale}")
         ttk.Label(movement, textvariable=self.repair_status, wraplength=500).pack(anchor="w", pady=(4, 0))
         ttk.Button(movement, text="Найти окно Minecraft", command=self.refresh_game_window).pack(anchor="w", pady=(5, 0))
         ttk.Button(movement, text="Включить F3 и проверить XYZ", command=self.check_coordinates).pack(anchor="w", pady=(5, 0))
@@ -614,7 +614,10 @@ class Observer:
                     self.stop_auto_tunnel()
                 self.set_status("Не удалось проверить прочность после ремонта. Авто-туннель остановлен для безопасности.")
         except Exception as exc:
-            self.set_status("Починка выполнена, но проверка прочности не удалась: " + str(exc)[:120])
+            self.repair_blocked = True
+            if self.tunnel_active:
+                self.stop_auto_tunnel()
+            self.set_status("Проверка прочности после ремонта завершилась ошибкой. Авто-туннель заблокирован: " + str(exc)[:120])
 
     def repair_watch_loop(self):
         try:
