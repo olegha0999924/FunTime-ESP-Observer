@@ -110,16 +110,21 @@ class Observer:
         self.config = {}
         self.forward_active = False
         self.mine_active = False
+        self.repair_watch_enabled = True
+        self.repair_watch_running = True
+        self.last_durability_notice = 0
         self.hotkey_listener = keyboard.GlobalHotKeys({
             "<f6>": self.toggle_forward,
             "<f7>": self.toggle_mine,
             "<f8>": self.stop_all,
+            "<f9>": self.toggle_repair_watch,
         })
         self.hotkey_listener.start()
         self.build()
         self.root.protocol("WM_DELETE_WINDOW", self.close)
         self.refresh_game_window()
         self.root.after(3000, self.poll_game_window)
+        threading.Thread(target=self.repair_watch_loop, daemon=True).start()
 
     def build(self):
         f = ttk.Frame(self.root, padding=14)
@@ -152,7 +157,7 @@ class Observer:
         movement.pack(fill="x", pady=6)
         ttk.Label(
             movement,
-            text="F6 — идти вперёд (W), F7 — удерживать ЛКМ, F8 — отпустить W и ЛКМ. Перед использованием активируй окно Minecraft.",
+            text="F6 — идти вперёд (W), F7 — удерживать ЛКМ, F8 — отпустить W и ЛКМ, F9 — контроль прочности. Кирка должна быть во втором слоте хотбара.",
             wraplength=500
         ).pack(anchor="w")
         self.move_status = tk.StringVar(value="Движение выключено")
@@ -161,6 +166,8 @@ class Observer:
         ttk.Label(movement, textvariable=self.mine_status).pack(anchor="w", pady=(2, 0))
         self.game_window_status = tk.StringVar(value="Проверяю окно Minecraft…")
         ttk.Label(movement, textvariable=self.game_window_status).pack(anchor="w", pady=(4, 0))
+        self.repair_status = tk.StringVar(value="Контроль прочности включён: порог остановки 20%")
+        ttk.Label(movement, textvariable=self.repair_status, wraplength=500).pack(anchor="w", pady=(4, 0))
         ttk.Button(movement, text="Найти окно Minecraft", command=self.refresh_game_window).pack(anchor="w", pady=(5, 0))
 
         buttons = ttk.Frame(f)
@@ -324,6 +331,58 @@ class Observer:
         if hasattr(self, "move_status"):
             self.root.after(0, lambda: self.move_status.set("Движение выключено"))
 
+
+    def toggle_repair_watch(self):
+        self.repair_watch_enabled = not self.repair_watch_enabled
+        value = ("Контроль прочности включён: порог остановки 20%"
+                 if self.repair_watch_enabled else "Контроль прочности выключен")
+        self.root.after(0, lambda: self.repair_status.set(value))
+
+    def read_pickaxe_durability(self, sct):
+        """Экспериментальная оценка полоски второго слота при 1920x1080, GUI Scale 2."""
+        region = {"left": 812, "top": 1055, "width": 56, "height": 16}
+        shot = np.array(sct.grab(region))
+        hsv = cv2.cvtColor(shot[:, :, :3], cv2.COLOR_BGR2HSV)
+        mask = ((hsv[:, :, 1] > 90) & (hsv[:, :, 2] > 70) &
+                ((hsv[:, :, 0] <= 12) | ((hsv[:, :, 0] >= 18) & (hsv[:, :, 0] <= 100))))
+        best = 0
+        for row in mask:
+            xs = np.where(row)[0]
+            if len(xs) >= 2:
+                best = max(best, int(xs.max() - xs.min() + 1))
+        if best < 3:
+            return None
+        return max(0, min(100, round(best / 26 * 100)))
+
+    def repair_watch_loop(self):
+        try:
+            with mss.mss() as sct:
+                while self.repair_watch_running:
+                    if self.repair_watch_enabled and self.mine_active:
+                        try:
+                            durability = self.read_pickaxe_durability(sct)
+                            if durability is not None:
+                                self.root.after(0, lambda d=durability: self.repair_status.set(
+                                    f"Прочность кирки (оценка): {d}%"))
+                                if durability <= 20:
+                                    self.stop_mine()
+                                    now = time.time()
+                                    if now - self.last_durability_notice > 10:
+                                        self.last_durability_notice = now
+                                        self.root.after(0, lambda: messagebox.showwarning(
+                                            "Кирка почти сломалась",
+                                            "Копание остановлено: прочность примерно 20% или ниже. "
+                                            "Автоматическое использование пузырьков опыта пока не включено."
+                                        ))
+                            else:
+                                self.root.after(0, lambda: self.repair_status.set(
+                                    "Полоска прочности не распознана; контроль ожидает изображения"))
+                        except Exception:
+                            pass
+                    time.sleep(0.5)
+        except Exception:
+            return
+
     def stop_all(self):
         self.stop_forward()
         self.stop_mine()
@@ -331,6 +390,7 @@ class Observer:
     def close(self):
         self.stop_all()
         self.running = False
+        self.repair_watch_running = False
         try:
             self.hotkey_listener.stop()
         except Exception:
