@@ -12,6 +12,7 @@ import numpy as np
 import pytesseract
 import requests
 from pynput import keyboard
+import pygetwindow as gw
 
 CAPTURES = Path("captures")
 CAPTURES.mkdir(exist_ok=True)
@@ -40,6 +41,8 @@ class Observer:
         self.hotkey_listener.start()
         self.build()
         self.root.protocol("WM_DELETE_WINDOW", self.close)
+        self.refresh_game_window()
+        self.root.after(3000, self.poll_game_window)
 
     def build(self):
         f = ttk.Frame(self.root, padding=14)
@@ -73,6 +76,9 @@ class Observer:
         ).pack(anchor="w")
         self.move_status = tk.StringVar(value="Движение выключено")
         ttk.Label(movement, textvariable=self.move_status).pack(anchor="w", pady=(4, 0))
+        self.game_window_status = tk.StringVar(value="Проверяю окно Minecraft…")
+        ttk.Label(movement, textvariable=self.game_window_status).pack(anchor="w", pady=(4, 0))
+        ttk.Button(movement, text="Найти окно Minecraft", command=self.refresh_game_window).pack(anchor="w", pady=(5, 0))
 
         buttons = ttk.Frame(f)
         buttons.pack(anchor="w", pady=10)
@@ -97,6 +103,31 @@ class Observer:
                  "Цветовые маски и область OCR могут потребовать настройки.",
             wraplength=520
         ).pack(anchor="w", pady=4)
+
+    def find_game_window(self):
+        try:
+            matches = [
+                title for title in gw.getAllTitles()
+                if title and "minecraft 1.21.4" in title.casefold()
+            ]
+            return matches[0] if matches else None
+        except Exception as exc:
+            return "ERROR:" + str(exc)
+
+    def refresh_game_window(self):
+        title = self.find_game_window()
+        if title is None:
+            self.game_window_status.set("Minecraft 1.21.4: окно не найдено")
+        elif title.startswith("ERROR:"):
+            self.game_window_status.set("Ошибка поиска окна: " + title[6:120])
+        else:
+            self.game_window_status.set("Найдено окно: " + title[:100])
+
+    def poll_game_window(self):
+        if not self.root.winfo_exists():
+            return
+        self.refresh_game_window()
+        self.root.after(3000, self.poll_game_window)
 
     def toggle_forward(self):
         if self.forward_active:
