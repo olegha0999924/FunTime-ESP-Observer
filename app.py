@@ -11,6 +11,7 @@ import mss
 import numpy as np
 import pytesseract
 import requests
+from pynput import keyboard
 
 CAPTURES = Path("captures")
 CAPTURES.mkdir(exist_ok=True)
@@ -30,7 +31,15 @@ class Observer:
         self.cooldown = tk.IntVar(value=45)
         self.attach = tk.BooleanVar(value=True)
         self.config = {}
+        self.forward_active = False
+        self.key_controller = keyboard.Controller()
+        self.hotkey_listener = keyboard.GlobalHotKeys({
+            "<f6>": self.toggle_forward,
+            "<f8>": self.stop_forward,
+        })
+        self.hotkey_listener.start()
         self.build()
+        self.root.protocol("WM_DELETE_WINDOW", self.close)
 
     def build(self):
         f = ttk.Frame(self.root, padding=14)
@@ -38,7 +47,7 @@ class Observer:
         ttk.Label(f, text="FunTime ESP Observer", font=("Segoe UI", 16, "bold")).pack(anchor="w")
         ttk.Label(
             f,
-            text="Экранный мониторинг ESP и уведомления Telegram. Персонажем не управляет."
+            text="ESP-мониторинг, Telegram и простой режим движения вперёд."
         ).pack(anchor="w", pady=(4, 12))
 
         ttk.Label(f, text="Telegram Bot Token").pack(anchor="w")
@@ -54,6 +63,16 @@ class Observer:
         ttk.Spinbox(line, from_=5, to=3600, textvariable=self.cooldown, width=8).pack(side="left", padx=6)
 
         ttk.Checkbutton(f, text="Прикреплять скриншот", variable=self.attach).pack(anchor="w", pady=6)
+
+        movement = ttk.LabelFrame(f, text="Управление движением", padding=8)
+        movement.pack(fill="x", pady=6)
+        ttk.Label(
+            movement,
+            text="F6 — удерживать W (идти вперёд) / остановить. F8 — экстренно отпустить W. Сначала активируй окно Minecraft.",
+            wraplength=500
+        ).pack(anchor="w")
+        self.move_status = tk.StringVar(value="Движение выключено")
+        ttk.Label(movement, textvariable=self.move_status).pack(anchor="w", pady=(4, 0))
 
         buttons = ttk.Frame(f)
         buttons.pack(anchor="w", pady=10)
@@ -78,6 +97,35 @@ class Observer:
                  "Цветовые маски и область OCR могут потребовать настройки.",
             wraplength=520
         ).pack(anchor="w", pady=4)
+
+    def toggle_forward(self):
+        if self.forward_active:
+            self.stop_forward()
+            return
+        try:
+            self.key_controller.press("w")
+            self.forward_active = True
+            self.root.after(0, lambda: self.move_status.set("Движение включено: удерживается W"))
+        except Exception as exc:
+            self.set_status("Не удалось включить движение: " + str(exc)[:150])
+
+    def stop_forward(self):
+        try:
+            self.key_controller.release("w")
+        except Exception:
+            pass
+        self.forward_active = False
+        if hasattr(self, "move_status"):
+            self.root.after(0, lambda: self.move_status.set("Движение выключено"))
+
+    def close(self):
+        self.stop_forward()
+        self.running = False
+        try:
+            self.hotkey_listener.stop()
+        except Exception:
+            pass
+        self.root.destroy()
 
     def set_status(self, text):
         self.root.after(0, lambda value=text: self.status.set(value))
