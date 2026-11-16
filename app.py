@@ -606,8 +606,8 @@ class Observer:
                         message = (
                             "Обнаружена ESP-подсветка\n"
                             + "Координаты игрока: " + self.coords(frame)
-                            + "\\n" + self.target_direction(frame)
-                            + f"\\n{datetime.now():%Y-%m-%d %H:%M:%S}\\nESP-пикселей: {count}"
+                            + "\n" + self.target_direction(frame)
+                            + f"\n{datetime.now():%Y-%m-%d %H:%M:%S}\nESP-пикселей: {count}"
                         )
                         threading.Thread(
                             target=self.send,
