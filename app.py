@@ -358,7 +358,7 @@ class Observer:
                     cv2.cvtColor(top_left, cv2.COLOR_BGR2GRAY),
                     config="--psm 6"
                 )
-                f3_visible = bool(re.search(r"\\b(XYZ|Facing|Block|Chunk)\\b", overlay_text, re.IGNORECASE))
+                f3_visible = bool(re.search(r"\b(XYZ|Facing|Block|Chunk)\b", overlay_text, re.IGNORECASE))
                 # Не нажимаем F3 повторно, если отладочный экран уже открыт.
                 if not result.startswith("X=") and not f3_visible:
                     send_f3_key(False)
