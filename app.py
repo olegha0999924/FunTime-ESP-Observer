@@ -111,6 +111,13 @@ def send_left_mouse(key_up=False):
     send_input(0, MOUSEINPUT(
         dx=0, dy=0, mouseData=0, dwFlags=flags, time=0, dwExtraInfo=0
     ))
+
+def send_f3_key(key_up=False):
+    """Send F3 key press/release to the foreground game window."""
+    flags = 0x0002 if key_up else 0
+    send_input(1, KEYBDINPUT(
+        wVk=0x72, wScan=0, dwFlags=flags, time=0, dwExtraInfo=0
+    ))
 CAPTURES.mkdir(exist_ok=True)
 
 
@@ -189,6 +196,7 @@ class Observer:
         self.repair_status = tk.StringVar(value="Контроль прочности включён: порог остановки 20%")
         ttk.Label(movement, textvariable=self.repair_status, wraplength=500).pack(anchor="w", pady=(4, 0))
         ttk.Button(movement, text="Найти окно Minecraft", command=self.refresh_game_window).pack(anchor="w", pady=(5, 0))
+        ttk.Button(movement, text="Включить F3 и проверить XYZ", command=self.check_coordinates).pack(anchor="w", pady=(5, 0))
 
         buttons = ttk.Frame(f)
         buttons.pack(anchor="w", pady=10)
@@ -306,6 +314,75 @@ class Observer:
             return
         self.refresh_game_window()
         self.root.after(3000, self.poll_game_window)
+
+    def _find_game_hwnd(self):
+        user32 = ctypes.windll.user32
+        found = []
+        @ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+        def enum_callback(hwnd, _):
+            if user32.IsWindowVisible(hwnd):
+                length = user32.GetWindowTextLengthW(hwnd)
+                if length:
+                    title = ctypes.create_unicode_buffer(length + 1)
+                    user32.GetWindowTextW(hwnd, title, length + 1)
+                    if "minecraft" in title.value.casefold():
+                        found.append(hwnd)
+            return True
+        user32.EnumWindows(enum_callback, 0)
+        return found[0] if found else None
+
+    def check_coordinates(self):
+        if not TESSERACT_PATH:
+            messagebox.showerror("OCR не найден", "Установи Tesseract OCR, затем перезапусти программу.")
+            return
+        self.status.set("Проверяю экран Minecraft и координаты…")
+        threading.Thread(target=self._check_coordinates_worker, daemon=True).start()
+
+    def _check_coordinates_worker(self):
+        try:
+            hwnd = self._find_game_hwnd()
+            if not hwnd:
+                raise RuntimeError("Окно Minecraft не найдено. Запусти игру в оконном или полноэкранном режиме.")
+            user32 = ctypes.windll.user32
+            user32.ShowWindow(hwnd, 5)
+            user32.SetForegroundWindow(hwnd)
+            time.sleep(0.8)
+            with mss.mss() as sct:
+                monitor = sct.monitors[1]
+                frame = cv2.cvtColor(np.array(sct.grab(monitor)), cv2.COLOR_BGRA2BGR)
+                result = self.coords(frame)
+                pressed_f3 = False
+                # Не переключаем F3, если координаты уже видны: так не выключим готовый экран отладки.
+                if not result.startswith("X="):
+                    send_f3_key(False)
+                    time.sleep(0.12)
+                    send_f3_key(True)
+                    pressed_f3 = True
+                    time.sleep(1.2)
+                    frame = cv2.cvtColor(np.array(sct.grab(monitor)), cv2.COLOR_BGRA2BGR)
+                    result = self.coords(frame)
+                stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                path = CAPTURES / f"coords_check_{stamp}.jpg"
+                cv2.imwrite(str(path), frame, [int(cv2.IMWRITE_JPEG_QUALITY), 92])
+            if result.startswith("X="):
+                message = "Координаты обнаружены: " + result
+                self.set_status(message)
+            else:
+                message = ("XYZ не удалось прочитать. " +
+                           ("F3 был нажат автоматически. " if pressed_f3 else "") +
+                           "Проверь, что Minecraft активен и строка XYZ видна слева сверху. " + result)
+                self.set_status(message)
+            token, chat = self.token.get().strip(), self.chat.get().strip()
+            if token and chat:
+                threading.Thread(target=self.send, args=(
+                    {"token": token, "chat": chat, "attach": True},
+                    "Проверка координат Minecraft:\n" + message, path
+                ), daemon=True).start()
+            self.root.after(0, lambda m=message: messagebox.showinfo("Проверка XYZ", m))
+        except Exception as exc:
+            error = str(exc)[:250]
+            self.set_status("Проверка координат: " + error)
+            self.root.after(0, lambda e=error: messagebox.showerror("Проверка XYZ", e))
 
     def toggle_forward(self):
         if self.forward_active:
