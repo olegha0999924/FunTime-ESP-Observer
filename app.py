@@ -12,7 +12,7 @@ import numpy as np
 import pytesseract
 import requests
 from pynput import keyboard
-import pygetwindow as gw
+import ctypes
 
 CAPTURES = Path("captures")
 CAPTURES.mkdir(exist_ok=True)
@@ -106,18 +106,36 @@ class Observer:
 
     def find_game_window(self):
         try:
-            matches = [
-                title for title in gw.getAllTitles()
-                if title and "minecraft 1.21.4" in title.casefold()
-            ]
-            return matches[0] if matches else None
+            user32 = ctypes.windll.user32
+            titles = []
+
+            @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+            def enum_callback(hwnd, _):
+                if user32.IsWindowVisible(hwnd):
+                    length = user32.GetWindowTextLengthW(hwnd)
+                    if length:
+                        buffer = ctypes.create_unicode_buffer(length + 1)
+                        user32.GetWindowTextW(hwnd, buffer, length + 1)
+                        title = buffer.value.strip()
+                        if title:
+                            titles.append(title)
+                return True
+
+            user32.EnumWindows(enum_callback, 0)
+            matches = [title for title in titles if "minecraft" in title.casefold()]
+            if matches:
+                return matches[0]
+            java_matches = [title for title in titles if "java" in title.casefold()]
+            if java_matches:
+                return "Возможно Minecraft: " + java_matches[0]
+            return None
         except Exception as exc:
             return "ERROR:" + str(exc)
 
     def refresh_game_window(self):
         title = self.find_game_window()
         if title is None:
-            self.game_window_status.set("Minecraft 1.21.4: окно не найдено")
+            self.game_window_status.set("Minecraft: окно не найдено. Проверь, что игра запущена.")
         elif title.startswith("ERROR:"):
             self.game_window_status.set("Ошибка поиска окна: " + title[6:120])
         else:
