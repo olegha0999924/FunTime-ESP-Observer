@@ -1,0 +1,1 @@
+@echo off\nchcp 65001 >nul\npy -m pip install --upgrade pip\npy -m pip install -r requirements.txt\npy app.py\npause\n
