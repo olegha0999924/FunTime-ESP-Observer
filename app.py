@@ -113,10 +113,11 @@ def send_left_mouse(key_up=False):
     ))
 
 def send_f3_key(key_up=False):
-    """Send F3 key press/release to the foreground game window."""
-    flags = 0x0002 if key_up else 0
+    """Send F3 using its hardware scan code; more reliable in Minecraft than VK-only input."""
+    # F3 is scan code 0x3D. KEYEVENTF_SCANCODE=0x0008, KEYEVENTF_KEYUP=0x0002.
+    flags = 0x0008 | (0x0002 if key_up else 0)
     send_input(1, KEYBDINPUT(
-        wVk=0x72, wScan=0, dwFlags=flags, time=0, dwExtraInfo=0
+        wVk=0, wScan=0x3D, dwFlags=flags, time=0, dwExtraInfo=0
     ))
 
 
@@ -688,18 +689,27 @@ class Observer:
                 first = cv2.cvtColor(np.array(sct.grab(monitor)), cv2.COLOR_BGRA2BGR)
                 coord_text = self.coords(first)
                 if not coord_text.startswith("X="):
-                    # Автоматически включаем F3 и повторяем чтение, прежде чем завершать запуск.
+                    # Reconfirm focus, send F3 as a scan-code key, then allow the overlay to render.
+                    if user32.GetForegroundWindow() != hwnd:
+                        user32.SetForegroundWindow(hwnd)
+                        time.sleep(0.5)
                     send_f3_key(False)
-                    time.sleep(0.12)
+                    time.sleep(0.10)
                     send_f3_key(True)
-                    time.sleep(1.0)
+                    time.sleep(1.5)
                     first = cv2.cvtColor(np.array(sct.grab(monitor)), cv2.COLOR_BGRA2BGR)
                     coord_text = self.coords(first)
                 if not coord_text.startswith("X="):
                     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                     debug_path = CAPTURES / f"f3_xyz_failed_{stamp}.jpg"
+                    debug_crop_path = CAPTURES / f"f3_xyz_failed_crop_{stamp}.jpg"
                     cv2.imwrite(str(debug_path), first, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
-                    raise RuntimeError("После автоматического нажатия F3 строка XYZ всё ещё не распознана. " + coord_text[:180] + f" Скриншот для проверки сохранён: {debug_path}")
+                    # Save an enlarged copy of the exact area OCR examines.
+                    h, w = first.shape[:2]
+                    crop = first[:int(h * .58), :int(w * .62)]
+                    crop = cv2.resize(crop, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+                    cv2.imwrite(str(debug_crop_path), crop, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+                    raise RuntimeError("После F3 XYZ не распознана. " + coord_text[:150] + f" Полный скриншот: {debug_path}; увеличенная область: {debug_crop_path}. Если F3 не появился, проверь Fn+F3 на клавиатуре.")
                 first_block = self.read_targeted_block(first)
                 if not first_block:
                     raise RuntimeError("F3 виден, но Targeted Block не распознан. Наведи прицел точно на блок и проверь правую колонку F3.")
@@ -862,51 +872,52 @@ class Observer:
         self.status.set("Остановка…")
 
     def coords(self, frame):
-        """Read Minecraft F3 XYZ using several OCR crops and preprocessing modes."""
+        """Read Minecraft F3 XYZ using focused crops, adaptive thresholding and tolerant parsing."""
         if not TESSERACT_PATH:
             return "Tesseract OCR не найден. Установи его или добавь в PATH."
         try:
             h, w = frame.shape[:2]
-            # XYZ находится в левой колонке F3. Берём с запасом по ширине/высоте,
-            # поскольку разрешение, масштаб интерфейса и размер шрифта различаются.
-            crop = frame[:int(h * .62), :int(w * .68)]
-            gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-            gray = cv2.resize(gray, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
-            contrast = cv2.convertScaleAbs(gray, alpha=1.9, beta=30)
-            variants = [
-                contrast,
-                cv2.bitwise_not(contrast),
-                cv2.threshold(contrast, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1],
+            # The XYZ row is near the upper-left corner. Several crop sizes handle
+            # different GUI scales and window sizes without OCR-ing the whole screen.
+            crops = [
+                frame[:int(h * .42), :int(w * .48)],
+                frame[:int(h * .58), :int(w * .62)],
+                frame[:int(h * .72), :int(w * .72)],
             ]
             number = r"[-+]?\d{1,7}(?:[.,]\d+)?"
-            # Tesseract иногда вставляет пробелы внутрь метки XYZ и меняет разделители.
             ocr_text = []
-            for image in variants:
-                for psm in (6, 11, 12):
-                    txt = pytesseract.image_to_string(
-                        image,
-                        config=f"--oem 3 --psm {psm} -c preserve_interword_spaces=1"
-                    )
-                    ocr_text.append(txt)
-                    normalized = txt.replace("×", "X").replace("|", "/")
-                    normalized = re.sub(r"X\s*Y\s*Z", "XYZ", normalized, flags=re.IGNORECASE)
-                    # Сначала ищем стандартную строку XYZ с любыми обычными разделителями.
-                    match = re.search(
-                        rf"XYZ\s*[:=]?\s*({number})\s*[/,; ]+\s*({number})\s*[/,; ]+\s*({number})",
-                        normalized, re.IGNORECASE
-                    )
-                    if match:
-                        values = [part.replace(",", ".") for part in match.groups()]
-                        return f"X={values[0]}, Y={values[1]}, Z={values[2]}"
-                    # Иногда OCR переносит XYZ и значения на следующую строку.
-                    match = re.search(
-                        rf"XYZ[\s:=-]*({number})[\s/,;]+({number})[\s/,;]+({number})",
-                        normalized, re.IGNORECASE
-                    )
-                    if match:
-                        values = [part.replace(",", ".") for part in match.groups()]
-                        return f"X={values[0]}, Y={values[1]}, Z={values[2]}"
-            diagnostic = " | ".join(" ".join(t.split())[:220] for t in ocr_text[:3])
+            for crop in crops:
+                gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+                gray = cv2.resize(gray, None, fx=4, fy=4, interpolation=cv2.INTER_CUBIC)
+                clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(gray)
+                variants = [
+                    clahe,
+                    cv2.bitwise_not(clahe),
+                    cv2.adaptiveThreshold(clahe, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                          cv2.THRESH_BINARY, 31, 9),
+                    cv2.threshold(clahe, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1],
+                ]
+                for image in variants:
+                    for psm in (6, 11, 4):
+                        txt = pytesseract.image_to_string(
+                            image,
+                            config=f"--oem 3 --psm {psm} -c preserve_interword_spaces=1"
+                        )
+                        ocr_text.append(txt)
+                        normalized = txt.replace("×", "X").replace("|", "/")
+                        normalized = re.sub(r"(?i)X\s*Y\s*Z", "XYZ", normalized)
+                        normalized = re.sub(r"(?i)X[YV]Z", "XYZ", normalized)
+                        # Permit OCR to omit the slash or confuse punctuation between numbers.
+                        patterns = [
+                            rf"XYZ\s*[:=]?\s*({number})\s*[/,;| ]+\s*({number})\s*[/,;| ]+\s*({number})",
+                            rf"XYZ[\s:=-]*({number})[\s/,;|]+({number})[\s/,;|]+({number})",
+                        ]
+                        for pattern in patterns:
+                            match = re.search(pattern, normalized, re.IGNORECASE)
+                            if match:
+                                values = [part.replace(",", ".") for part in match.groups()]
+                                return f"X={values[0]}, Y={values[1]}, Z={values[2]}"
+            diagnostic = " | ".join(" ".join(t.split())[:180] for t in ocr_text[:6])
             return "XYZ-строка не распознана. Текст OCR: " + diagnostic
         except pytesseract.pytesseract.TesseractNotFoundError:
             return "Tesseract OCR не найден по пути: " + str(TESSERACT_PATH)
