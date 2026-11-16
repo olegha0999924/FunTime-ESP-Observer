@@ -464,20 +464,34 @@ class Observer:
         self.root.after(0, lambda: self.repair_status.set(value))
 
     def read_pickaxe_durability(self, sct):
-        """Экспериментальная оценка полоски второго слота при 1920x1080, GUI Scale 2."""
-        region = {"left": 812, "top": 1055, "width": 56, "height": 16}
+        """Estimate slot-2 durability using a resolution-relative hotbar crop."""
+        monitor = sct.monitors[1]
+        width, height = int(monitor["width"]), int(monitor["height"])
+        scale = width / 1920.0
+        # Slot 2's durability bar on a centered 9-slot hotbar (calibrated for 1920x1080, GUI scale 2).
+        region = {
+            "left": int(monitor["left"] + width * 0.423),
+            "top": int(monitor["top"] + height - 25 * scale),
+            "width": max(24, int(56 * scale)),
+            "height": max(8, int(16 * scale)),
+        }
         shot = np.array(sct.grab(region))
         hsv = cv2.cvtColor(shot[:, :, :3], cv2.COLOR_BGR2HSV)
-        mask = ((hsv[:, :, 1] > 90) & (hsv[:, :, 2] > 70) &
-                ((hsv[:, :, 0] <= 12) | ((hsv[:, :, 0] >= 18) & (hsv[:, :, 0] <= 100))))
+        # Durability bar shifts from green through yellow/orange to red as it wears.
+        mask = ((hsv[:, :, 1] > 65) & (hsv[:, :, 2] > 65) &
+                (hsv[:, :, 0] <= 100))
         best = 0
         for row in mask:
             xs = np.where(row)[0]
             if len(xs) >= 2:
-                best = max(best, int(xs.max() - xs.min() + 1))
-        if best < 3:
+                # Use the longest continuous run; ignore scattered UI pixels.
+                splits = np.where(np.diff(xs) > 2)[0] + 1
+                groups = np.split(xs, splits)
+                best = max(best, max((int(g[-1] - g[0] + 1) for g in groups if len(g) >= 2), default=0))
+        expected = max(5, 26 * scale)
+        if best < max(3, int(expected * 0.08)):
             return None
-        return max(0, min(100, round(best / 26 * 100)))
+        return max(0, min(100, round(best / expected * 100)))
 
     def start_manual_repair(self):
         if self.repair_in_progress:
