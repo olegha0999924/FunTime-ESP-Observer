@@ -154,6 +154,9 @@ class Observer:
         self.last_durability_notice = 0
         self.repair_in_progress = False
         self.repair_cancel = threading.Event()
+        self.tunnel_active = False
+        self.tunnel_thread = None
+        self.tunnel_stop = threading.Event()
         self.hotkey_listener = keyboard.GlobalHotKeys({
             "<f6>": self.toggle_forward,
             "<f7>": self.toggle_mine,
@@ -212,6 +215,9 @@ class Observer:
         ttk.Button(movement, text="Найти окно Minecraft", command=self.refresh_game_window).pack(anchor="w", pady=(5, 0))
         ttk.Button(movement, text="Включить F3 и проверить XYZ", command=self.check_coordinates).pack(anchor="w", pady=(5, 0))
         ttk.Button(movement, text="Починить кирку сейчас (тест)", command=self.start_manual_repair).pack(anchor="w", pady=(5, 0))
+        ttk.Button(movement, text="Запустить авто-туннель (тест)", command=self.start_auto_tunnel).pack(anchor="w", pady=(5, 0))
+        self.tunnel_status = tk.StringVar(value="Авто-туннель выключен")
+        ttk.Label(movement, textvariable=self.tunnel_status, wraplength=500).pack(anchor="w", pady=(4, 0))
 
         buttons = ttk.Frame(f)
         buttons.pack(anchor="w", pady=10)
@@ -582,8 +588,124 @@ class Observer:
         except Exception:
             return
 
+    def read_targeted_block(self, frame):
+        """Read Minecraft F3 Targeted Block identifier from the right debug panel."""
+        if not TESSERACT_PATH:
+            return None
+        h, w = frame.shape[:2]
+        # In Java 1.21.x the targeted block section is in the right-hand F3 column.
+        crop = frame[:int(h * 0.82), int(w * 0.48):]
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+        gray = cv2.resize(gray, None, fx=2.5, fy=2.5, interpolation=cv2.INTER_CUBIC)
+        gray = cv2.convertScaleAbs(gray, alpha=1.7, beta=30)
+        txt = pytesseract.image_to_string(gray, config="--psm 6")
+        normalized = re.sub(r"\\s+", " ", txt).lower()
+        # Require the Targeted Block heading so unrelated block IDs are not used.
+        heading = re.search(r"targeted\\s*block", normalized)
+        if not heading:
+            return None
+        tail = normalized[heading.end():heading.end() + 260]
+        match = re.search(r"minecraft:([a-z0-9_]+)", tail)
+        return "minecraft:" + match.group(1) if match else None
+
+    def start_auto_tunnel(self):
+        if self.tunnel_active:
+            self.stop_auto_tunnel()
+            return
+        if not TESSERACT_PATH:
+            messagebox.showerror("Нужен OCR", "Для авто-туннеля нужен установленный Tesseract OCR.")
+            return
+        if not messagebox.askyesno(
+            "Авто-туннель — тестовый режим",
+            "Запускать только в собственном тестовом мире. Проверь: кирка в слоте 2, лопата в слоте 3, "
+            "F3 открыт, прицел направлен на блок перед персонажем, высота игрока от Y=-60 до Y=0. "
+            "Программа будет копать прямо вперёд; при неизвестном блоке, потере F3 или выходе из диапазона остановится. Продолжить?"
+        ):
+            return
+        self.tunnel_stop.clear()
+        self.tunnel_active = True
+        self.tunnel_thread = threading.Thread(target=self.auto_tunnel_loop, daemon=True)
+        self.tunnel_thread.start()
+        self.root.after(0, lambda: self.tunnel_status.set("Авто-туннель запущен — F8 для остановки"))
+
+    def stop_auto_tunnel(self):
+        self.tunnel_stop.set()
+        self.tunnel_active = False
+        try:
+            send_w_key(key_up=True)
+            send_left_mouse(key_up=True)
+        except Exception:
+            pass
+        self.mine_active = False
+        self.forward_active = False
+        if hasattr(self, "tunnel_status"):
+            self.root.after(0, lambda: self.tunnel_status.set("Авто-туннель остановлен"))
+
+    def auto_tunnel_loop(self):
+        current_tool = None
+        try:
+            hwnd = self._find_game_hwnd()
+            if not hwnd:
+                raise RuntimeError("Окно Minecraft не найдено.")
+            user32 = ctypes.windll.user32
+            # Bring Minecraft to foreground before issuing controls.
+            user32.ShowWindow(hwnd, 5)
+            user32.SetForegroundWindow(hwnd)
+            time.sleep(0.6)
+            with mss.mss() as sct:
+                monitor = sct.monitors[1]
+                while self.tunnel_active and not self.tunnel_stop.is_set():
+                    if user32.GetForegroundWindow() != hwnd:
+                        raise RuntimeError("Окно Minecraft потеряло фокус — остановлено для безопасности.")
+                    frame = cv2.cvtColor(np.array(sct.grab(monitor)), cv2.COLOR_BGRA2BGR)
+                    coord_text = self.coords(frame)
+                    coord_match = re.search(r"Y=([-+]?\\d+(?:[.,]\\d+)?)", coord_text)
+                    if not coord_match:
+                        raise RuntimeError("Не удалось прочитать XYZ из F3. Копание остановлено.")
+                    y = float(coord_match.group(1).replace(",", "."))
+                    if y < -60 or y > 0:
+                        raise RuntimeError(f"Высота Y={y:g} вне разрешённого диапазона от -60 до 0.")
+
+                    block = self.read_targeted_block(frame)
+                    if not block:
+                        raise RuntimeError("Не распознан Targeted Block в F3. Проверь прицел и правую колонку F3.")
+                    if block in ("minecraft:air", "minecraft:cave_air", "minecraft:void_air",
+                                 "minecraft:water", "minecraft:lava"):
+                        send_w_key(key_up=True)
+                        send_left_mouse(key_up=True)
+                        time.sleep(0.5)
+                        continue
+
+                    shovel_blocks = (
+                        "dirt", "coarse_dirt", "rooted_dirt", "grass_block", "podzol",
+                        "mycelium", "gravel", "sand", "red_sand", "clay", "mud",
+                        "packed_mud", "soul_sand", "soul_soil", "farmland", "dirt_path"
+                    )
+                    tool = 3 if any(block == "minecraft:" + name for name in shovel_blocks) else 2
+                    if current_tool != tool:
+                        send_w_key(key_up=True)
+                        send_left_mouse(key_up=True)
+                        tap_key(0x30 + tool)
+                        current_tool = tool
+                        time.sleep(0.18)
+
+                    if not self.mine_active:
+                        send_left_mouse(key_up=False)
+                        self.mine_active = True
+                    if not self.forward_active:
+                        send_w_key(key_up=False)
+                        self.forward_active = True
+                    self.root.after(0, lambda b=block, t=tool, yy=y: self.tunnel_status.set(
+                        f"Копаю: {b}; инструмент — {'лопата' if t == 3 else 'кирка'}; Y={yy:g}"))
+                    time.sleep(0.8)
+        except Exception as exc:
+            self.set_status("Авто-туннель остановлен: " + str(exc)[:180])
+        finally:
+            self.stop_auto_tunnel()
+
     def stop_all(self):
         self.repair_cancel.set()
+        self.stop_auto_tunnel()
         self.stop_forward()
         self.stop_mine()
 
