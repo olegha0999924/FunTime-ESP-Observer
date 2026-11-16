@@ -3,6 +3,8 @@ from tkinter import ttk, messagebox
 import threading
 import time
 import re
+import shutil
+import os
 from pathlib import Path
 from datetime import datetime
 
@@ -16,6 +18,24 @@ import ctypes
 from ctypes import wintypes
 
 CAPTURES = Path("captures")
+
+def configure_tesseract():
+    """Find the Windows Tesseract executable automatically."""
+    candidates = [
+        shutil.which("tesseract"),
+        r"C:\\Program Files\\Tesseract-OCR\\tesseract.exe",
+        r"C:\\Program Files (x86)\\Tesseract-OCR\\tesseract.exe",
+        str(Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Tesseract-OCR" / "tesseract.exe"),
+    ]
+    for candidate in candidates:
+        if candidate and Path(candidate).is_file():
+            pytesseract.pytesseract.tesseract_cmd = str(candidate)
+            return str(candidate)
+    return None
+
+
+TESSERACT_PATH = configure_tesseract()
+
 
 # Windows keyboard input fallback: some games do not accept pynput events.
 ULONG_PTR = ctypes.c_ulonglong if ctypes.sizeof(ctypes.c_void_p) == 8 else ctypes.c_ulong
@@ -466,6 +486,8 @@ class Observer:
         self.status.set("Остановка…")
 
     def coords(self, frame):
+        if not TESSERACT_PATH:
+            return "Tesseract OCR не найден. Установи его или добавь в PATH."
         try:
             h, w = frame.shape[:2]
             crop = frame[:int(h * .28), :int(w * .42)]
@@ -478,10 +500,12 @@ class Observer:
             )
             return (
                 f"X={match.group(1)}, Y={match.group(2)}, Z={match.group(3)}"
-                if match else "Координаты не распознаны"
+                if match else "Координаты не распознаны: проверь отображение координат в игре"
             )
-        except Exception:
-            return "Координаты недоступны (проверь установку Tesseract OCR)"
+        except pytesseract.pytesseract.TesseractNotFoundError:
+            return "Tesseract OCR не найден по пути: " + str(TESSERACT_PATH)
+        except Exception as exc:
+            return "Ошибка распознавания координат: " + str(exc)[:120]
 
     def send(self, config, msg, photo):
         token, chat = config["token"], config["chat"]
