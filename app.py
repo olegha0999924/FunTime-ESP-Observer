@@ -29,6 +29,7 @@ class Observer:
         self.threshold = tk.IntVar(value=180)
         self.cooldown = tk.IntVar(value=45)
         self.attach = tk.BooleanVar(value=True)
+        self.config = {}
         self.build()
 
     def build(self):
