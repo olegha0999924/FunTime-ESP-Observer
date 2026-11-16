@@ -670,6 +670,34 @@ class Observer:
 
     def loop(self, config):
         try:
+            # Автоматически включаем F3 при старте мониторинга, если отладочный экран не виден.
+            if TESSERACT_PATH:
+                hwnd = self._find_game_hwnd()
+                if hwnd:
+                    user32 = ctypes.windll.user32
+                    user32.ShowWindow(hwnd, 5)
+                    user32.SetForegroundWindow(hwnd)
+                    time.sleep(0.7)
+                    with mss.mss() as startup_sct:
+                        startup_frame = cv2.cvtColor(
+                            np.array(startup_sct.grab(startup_sct.monitors[1])),
+                            cv2.COLOR_BGRA2BGR
+                        )
+                    if not self.coords(startup_frame).startswith("X="):
+                        top_left = startup_frame[:int(startup_frame.shape[0] * .48),
+                                                 :int(startup_frame.shape[1] * .48)]
+                        overlay_text = pytesseract.image_to_string(
+                            cv2.cvtColor(top_left, cv2.COLOR_BGR2GRAY),
+                            config="--psm 6"
+                        )
+                        overlay_visible = bool(re.search(
+                            r"XYZ|Facing|Block|Chunk|Biome|FPS", overlay_text, re.IGNORECASE
+                        ))
+                        if not overlay_visible:
+                            send_f3_key(False)
+                            time.sleep(0.12)
+                            send_f3_key(True)
+                            time.sleep(1.0)
             with mss.mss() as sct:
                 mon = sct.monitors[1]
                 while self.running:
