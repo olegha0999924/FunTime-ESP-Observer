@@ -685,7 +685,18 @@ class Observer:
                 first = cv2.cvtColor(np.array(sct.grab(monitor)), cv2.COLOR_BGRA2BGR)
                 coord_text = self.coords(first)
                 if not coord_text.startswith("X="):
-                    raise RuntimeError("Не читаются координаты F3. Открой F3 и проверь строку XYZ. " + coord_text[:100])
+                    # Автоматически включаем F3 и повторяем чтение, прежде чем завершать запуск.
+                    send_f3_key(False)
+                    time.sleep(0.12)
+                    send_f3_key(True)
+                    time.sleep(1.0)
+                    first = cv2.cvtColor(np.array(sct.grab(monitor)), cv2.COLOR_BGRA2BGR)
+                    coord_text = self.coords(first)
+                if not coord_text.startswith("X="):
+                    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    debug_path = CAPTURES / f"f3_xyz_failed_{stamp}.jpg"
+                    cv2.imwrite(str(debug_path), first, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+                    raise RuntimeError("После автоматического нажатия F3 строка XYZ всё ещё не распознана. " + coord_text[:180] + f" Скриншот для проверки сохранён: {debug_path}")
                 first_block = self.read_targeted_block(first)
                 if not first_block:
                     raise RuntimeError("F3 виден, но Targeted Block не распознан. Наведи прицел точно на блок и проверь правую колонку F3.")
