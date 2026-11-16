@@ -63,13 +63,13 @@ class INPUT(ctypes.Structure):
     _fields_ = [("type", wintypes.DWORD), ("u", INPUT_UNION)]
 
 
-def send_w_key(key_up=False):
-    flags = 0x0002 if key_up else 0
+def send_input(event_type, union_value):
     event = INPUT()
-    event.type = 1  # INPUT_KEYBOARD
-    event.ki = KEYBDINPUT(
-        wVk=0x57, wScan=0, dwFlags=flags, time=0, dwExtraInfo=0
-    )
+    event.type = event_type
+    if event_type == 1:
+        event.ki = union_value
+    else:
+        event.mi = union_value
     user32 = ctypes.WinDLL("user32", use_last_error=True)
     user32.SendInput.argtypes = (wintypes.UINT, ctypes.POINTER(INPUT), ctypes.c_int)
     user32.SendInput.restype = wintypes.UINT
@@ -77,6 +77,20 @@ def send_w_key(key_up=False):
     if sent != 1:
         error = ctypes.get_last_error()
         raise OSError(error, ctypes.FormatError(error) if error else "SendInput не принял событие")
+
+
+def send_w_key(key_up=False):
+    flags = 0x0002 if key_up else 0
+    send_input(1, KEYBDINPUT(
+        wVk=0x57, wScan=0, dwFlags=flags, time=0, dwExtraInfo=0
+    ))
+
+
+def send_left_mouse(key_up=False):
+    flags = 0x0004 if key_up else 0x0002
+    send_input(0, MOUSEINPUT(
+        dx=0, dy=0, mouseData=0, dwFlags=flags, time=0, dwExtraInfo=0
+    ))
 CAPTURES.mkdir(exist_ok=True)
 
 
@@ -84,7 +98,7 @@ class Observer:
     def __init__(self, root):
         self.root = root
         self.root.title("FunTime ESP Observer")
-        self.root.geometry("560x470")
+        self.root.geometry("560x500")
         self.root.minsize(520, 430)
         self.running = False
         self.last_alert = 0
@@ -95,9 +109,11 @@ class Observer:
         self.attach = tk.BooleanVar(value=True)
         self.config = {}
         self.forward_active = False
+        self.mine_active = False
         self.hotkey_listener = keyboard.GlobalHotKeys({
             "<f6>": self.toggle_forward,
-            "<f8>": self.stop_forward,
+            "<f7>": self.toggle_mine,
+            "<f8>": self.stop_all,
         })
         self.hotkey_listener.start()
         self.build()
@@ -132,11 +148,13 @@ class Observer:
         movement.pack(fill="x", pady=6)
         ttk.Label(
             movement,
-            text="F6 — удерживать W (идти вперёд) / остановить. F8 — экстренно отпустить W. Сначала активируй окно Minecraft.",
+            text="F6 — идти вперёд (W), F7 — удерживать ЛКМ, F8 — отпустить W и ЛКМ. Перед использованием активируй окно Minecraft.",
             wraplength=500
         ).pack(anchor="w")
         self.move_status = tk.StringVar(value="Движение выключено")
         ttk.Label(movement, textvariable=self.move_status).pack(anchor="w", pady=(4, 0))
+        self.mine_status = tk.StringVar(value="Копание выключено")
+        ttk.Label(movement, textvariable=self.mine_status).pack(anchor="w", pady=(2, 0))
         self.game_window_status = tk.StringVar(value="Проверяю окно Minecraft…")
         ttk.Label(movement, textvariable=self.game_window_status).pack(anchor="w", pady=(4, 0))
         ttk.Button(movement, text="Найти окно Minecraft", command=self.refresh_game_window).pack(anchor="w", pady=(5, 0))
@@ -221,6 +239,28 @@ class Observer:
             self.root.after(0, lambda value=message: self.move_status.set(value))
             self.set_status(message)
 
+    def toggle_mine(self):
+        if self.mine_active:
+            self.stop_mine()
+            return
+        try:
+            send_left_mouse(key_up=False)
+            self.mine_active = True
+            self.root.after(0, lambda: self.mine_status.set("ЛКМ удерживается: копание включено"))
+        except Exception as exc:
+            message = "Ошибка F7: " + str(exc)[:140]
+            self.root.after(0, lambda value=message: self.mine_status.set(value))
+            self.set_status(message)
+
+    def stop_mine(self):
+        try:
+            send_left_mouse(key_up=True)
+        except Exception:
+            pass
+        self.mine_active = False
+        if hasattr(self, "mine_status"):
+            self.root.after(0, lambda: self.mine_status.set("Копание выключено"))
+
     def stop_forward(self):
         try:
             send_w_key(key_up=True)
@@ -230,8 +270,12 @@ class Observer:
         if hasattr(self, "move_status"):
             self.root.after(0, lambda: self.move_status.set("Движение выключено"))
 
-    def close(self):
+    def stop_all(self):
         self.stop_forward()
+        self.stop_mine()
+
+    def close(self):
+        self.stop_all()
         self.running = False
         try:
             self.hotkey_listener.stop()
