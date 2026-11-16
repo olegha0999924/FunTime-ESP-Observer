@@ -599,9 +599,9 @@ class Observer:
         gray = cv2.resize(gray, None, fx=2.5, fy=2.5, interpolation=cv2.INTER_CUBIC)
         gray = cv2.convertScaleAbs(gray, alpha=1.7, beta=30)
         txt = pytesseract.image_to_string(gray, config="--psm 6")
-        normalized = re.sub(r"\\s+", " ", txt).lower()
+        normalized = re.sub(r"\s+", " ", txt).lower()
         # Require the Targeted Block heading so unrelated block IDs are not used.
-        heading = re.search(r"targeted\\s*block", normalized)
+        heading = re.search(r"targeted\s*block", normalized)
         if not heading:
             return None
         tail = normalized[heading.end():heading.end() + 260]
@@ -659,7 +659,7 @@ class Observer:
                         raise RuntimeError("Окно Minecraft потеряло фокус — остановлено для безопасности.")
                     frame = cv2.cvtColor(np.array(sct.grab(monitor)), cv2.COLOR_BGRA2BGR)
                     coord_text = self.coords(frame)
-                    coord_match = re.search(r"Y=([-+]?\\d+(?:[.,]\\d+)?)", coord_text)
+                    coord_match = re.search(r"Y=([-+]?\d+(?:[.,]\d+)?)", coord_text)
                     if not coord_match:
                         raise RuntimeError("Не удалось прочитать XYZ из F3. Копание остановлено.")
                     y = float(coord_match.group(1).replace(",", "."))
