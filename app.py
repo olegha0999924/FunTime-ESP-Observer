@@ -188,26 +188,44 @@ class Observer:
         ).pack(anchor="w", pady=4)
 
     def enable_paste(self, widget):
-        """Добавляет явные сочетания клавиш и контекстное меню для вставки текста."""
+        """Надёжная вставка текста из буфера обмена в поля Tkinter."""
         menu = tk.Menu(widget, tearoff=0)
         menu.add_command(label="Вырезать", command=lambda: widget.event_generate("<<Cut>>"))
         menu.add_command(label="Копировать", command=lambda: widget.event_generate("<<Copy>>"))
-        menu.add_command(label="Вставить", command=lambda: widget.event_generate("<<Paste>>"))
+        menu.add_command(label="Вставить", command=lambda: paste_text())
         menu.add_separator()
         menu.add_command(label="Выделить всё", command=lambda: (
             widget.select_range(0, "end"),
             widget.icursor("end")
         ))
 
+        def paste_text(event=None):
+            try:
+                clipboard_text = self.root.clipboard_get()
+                try:
+                    first = widget.index("sel.first")
+                    last = widget.index("sel.last")
+                    widget.delete(first, last)
+                except tk.TclError:
+                    pass
+                widget.insert("insert", clipboard_text)
+                return "break"
+            except tk.TclError:
+                return "break"
+
         def show_menu(event):
             try:
+                widget.focus_set()
                 menu.tk_popup(event.x_root, event.y_root)
             finally:
                 menu.grab_release()
 
         widget.bind("<Button-3>", show_menu)
-        widget.bind("<Control-v>", lambda event: (widget.event_generate("<<Paste>>"), "break")[1])
-        widget.bind("<Control-V>", lambda event: (widget.event_generate("<<Paste>>"), "break")[1])
+        widget.bind("<Control-v>", paste_text)
+        widget.bind("<Control-V>", paste_text)
+        widget.bind("<Control-KeyPress-v>", paste_text)
+        widget.bind("<Control-KeyPress-V>", paste_text)
+        widget.bind("<Shift-Insert>", paste_text)
         widget.bind("<Control-c>", lambda event: (widget.event_generate("<<Copy>>"), "break")[1])
         widget.bind("<Control-C>", lambda event: (widget.event_generate("<<Copy>>"), "break")[1])
         widget.bind("<Control-x>", lambda event: (widget.event_generate("<<Cut>>"), "break")[1])
