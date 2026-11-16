@@ -501,7 +501,7 @@ class Observer:
         slot2_center_x = monitor["left"] + width / 2 - 60 * pixel_scale
         region = {
             "left": int(slot2_center_x - 18 * pixel_scale),
-            "top": int(monitor["top"] + height - 25 * pixel_scale),
+            "top": int(monitor["top"] + height - round(25 * pixel_scale)),
             "width": max(24, int(36 * pixel_scale)),
             "height": max(8, int(16 * pixel_scale)),
         }
