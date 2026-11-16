@@ -1,1 +1,6 @@
-mss\nopencv-python\nnumpy\npytesseract\nPillow\nrequests\n
+mss
+opencv-python
+numpy
+pytesseract
+Pillow
+requests
