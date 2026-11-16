@@ -1,0 +1,1 @@
+mss\nopencv-python\nnumpy\npytesseract\nPillow\nrequests\n
