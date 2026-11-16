@@ -347,23 +347,42 @@ class Observer:
             messagebox.showwarning("Не заполнено", "Введи Telegram Bot Token и Chat ID.")
             return
         self.test_btn.config(state="disabled")
-        self.status.set("Проверяю подключение к Telegram…")
-        threading.Thread(target=self._test_telegram_worker, args=(token, chat), daemon=True).start()
+        self.status.set("Проверяю Telegram… подожди до 15 секунд.")
+        threading.Thread(
+            target=self._test_telegram_worker,
+            args=(token, chat),
+            daemon=True
+        ).start()
 
     def _test_telegram_worker(self, token, chat):
         try:
             response = requests.post(
                 f"https://api.telegram.org/bot{token}/sendMessage",
-                data={"chat_id": chat, "text": "FunTime ESP Observer: тестовое сообщение. Telegram подключён."},
+                data={
+                    "chat_id": chat,
+                    "text": "FunTime ESP Observer: тестовое сообщение. Telegram подключён."
+                },
                 timeout=15
             )
-            response.raise_for_status()
-            result = response.json()
-            if not result.get("ok"):
-                raise RuntimeError(result.get("description", "Telegram API вернул ошибку"))
+            try:
+                result = response.json()
+            except ValueError:
+                result = {}
+            if response.status_code != 200 or not result.get("ok"):
+                description = result.get("description") or response.text[:300] or f"HTTP {response.status_code}"
+                raise RuntimeError(description)
+            self.root.after(0, lambda: messagebox.showinfo(
+                "Telegram подключён",
+                "Тестовое сообщение успешно отправлено. Проверь Telegram."
+            ))
             self.set_status("Успешно! Тестовое сообщение отправлено в Telegram.")
         except Exception as exc:
-            self.set_status("Ошибка Telegram: " + str(exc)[:220])
+            error_text = str(exc)[:350]
+            self.set_status("Ошибка Telegram: " + error_text)
+            self.root.after(0, lambda value=error_text: messagebox.showerror(
+                "Не удалось отправить сообщение",
+                "Telegram вернул ошибку или не ответил. Подробности:\\n" + value
+            ))
         finally:
             self.root.after(0, lambda: self.test_btn.config(state="normal"))
 
