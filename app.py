@@ -468,11 +468,14 @@ class Observer:
         monitor = sct.monitors[1]
         width, height = int(monitor["width"]), int(monitor["height"])
         scale = width / 1920.0
-        # Slot 2's durability bar on a centered 9-slot hotbar (calibrated for 1920x1080, GUI scale 2).
+        # Slot 2 is the second hotbar cell from the left of center.
+        # Minecraft's standard hotbar cell spacing is about 20 scaled pixels;
+        # the durability bar is centered under the item icon.
+        slot2_center_x = monitor["left"] + width / 2 - 60 * scale
         region = {
-            "left": int(monitor["left"] + width * 0.423),
+            "left": int(slot2_center_x - 18 * scale),
             "top": int(monitor["top"] + height - 25 * scale),
-            "width": max(24, int(56 * scale)),
+            "width": max(24, int(36 * scale)),
             "height": max(8, int(16 * scale)),
         }
         shot = np.array(sct.grab(region))
@@ -701,6 +704,14 @@ class Observer:
                 if not first_block:
                     raise RuntimeError("F3 виден, но Targeted Block не распознан. Наведи прицел точно на блок и проверь правую колонку F3.")
                 while self.tunnel_active and not self.tunnel_stop.is_set():
+                    if self.repair_in_progress:
+                        # Do not restart movement/mining while the repair worker is handling inventory.
+                        send_w_key(key_up=True)
+                        send_left_mouse(key_up=True)
+                        self.mine_active = False
+                        self.forward_active = False
+                        time.sleep(0.15)
+                        continue
                     if user32.GetForegroundWindow() != hwnd:
                         raise RuntimeError("Окно Minecraft потеряло фокус — управление остановлено.")
                     frame = cv2.cvtColor(np.array(sct.grab(monitor)), cv2.COLOR_BGRA2BGR)
