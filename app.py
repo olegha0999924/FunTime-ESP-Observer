@@ -13,8 +13,41 @@ import pytesseract
 import requests
 from pynput import keyboard
 import ctypes
+from ctypes import wintypes
 
 CAPTURES = Path("captures")
+
+# Windows keyboard input fallback: some games do not accept pynput events.
+ULONG_PTR = ctypes.c_ulonglong if ctypes.sizeof(ctypes.c_void_p) == 8 else ctypes.c_ulong
+
+
+class KEYBDINPUT(ctypes.Structure):
+    _fields_ = [
+        ("wVk", wintypes.WORD),
+        ("wScan", wintypes.WORD),
+        ("dwFlags", wintypes.DWORD),
+        ("time", wintypes.DWORD),
+        ("dwExtraInfo", ULONG_PTR),
+    ]
+
+
+class INPUT_UNION(ctypes.Union):
+    _fields_ = [("ki", KEYBDINPUT)]
+
+
+class INPUT(ctypes.Structure):
+    _anonymous_ = ("u",)
+    _fields_ = [("type", wintypes.DWORD), ("u", INPUT_UNION)]
+
+
+def send_w_key(key_up=False):
+    flags = 0x0002 if key_up else 0
+    event = INPUT(type=1, ki=KEYBDINPUT(
+        wVk=0x57, wScan=0, dwFlags=flags, time=0, dwExtraInfo=0
+    ))
+    sent = ctypes.windll.user32.SendInput(1, ctypes.byref(event), ctypes.sizeof(INPUT))
+    if sent != 1:
+        raise ctypes.WinError(ctypes.get_last_error())
 CAPTURES.mkdir(exist_ok=True)
 
 
@@ -33,7 +66,6 @@ class Observer:
         self.attach = tk.BooleanVar(value=True)
         self.config = {}
         self.forward_active = False
-        self.key_controller = keyboard.Controller()
         self.hotkey_listener = keyboard.GlobalHotKeys({
             "<f6>": self.toggle_forward,
             "<f8>": self.stop_forward,
@@ -152,7 +184,7 @@ class Observer:
             self.stop_forward()
             return
         try:
-            self.key_controller.press("w")
+            send_w_key(key_up=False)
             self.forward_active = True
             self.root.after(0, lambda: self.move_status.set("Движение включено: удерживается W"))
         except Exception as exc:
@@ -160,7 +192,7 @@ class Observer:
 
     def stop_forward(self):
         try:
-            self.key_controller.release("w")
+            send_w_key(key_up=True)
         except Exception:
             pass
         self.forward_active = False
