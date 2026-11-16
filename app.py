@@ -23,8 +23,8 @@ def configure_tesseract():
     """Find the Windows Tesseract executable automatically."""
     candidates = [
         shutil.which("tesseract"),
-        r"C:\\Program Files\\Tesseract-OCR\\tesseract.exe",
-        r"C:\\Program Files (x86)\\Tesseract-OCR\\tesseract.exe",
+        r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+        r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
         str(Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Tesseract-OCR" / "tesseract.exe"),
     ]
     for candidate in candidates:
