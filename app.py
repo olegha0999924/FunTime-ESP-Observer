@@ -618,16 +618,16 @@ class Observer:
             for psm in (6, 11):
                 try:
                     txt = pytesseract.image_to_string(image, config=f"--psm {psm}")
-                    texts.append(re.sub(r"\\s+", " ", txt).lower())
+                    texts.append(re.sub(r"\s+", " ", txt).lower())
                 except Exception:
                     continue
         for normalized in texts:
             # Require the Targeted Block label, but tolerate OCR punctuation/spacing.
-            heading = re.search(r"targeted\\s*block", normalized)
+            heading = re.search(r"targeted\s*block", normalized)
             if not heading:
                 continue
             tail = normalized[heading.end():heading.end() + 900]
-            match = re.search(r"minecraft\\s*:\\s*([a-z0-9_]+)", tail)
+            match = re.search(r"minecraft\s*:\s*([a-z0-9_]+)", tail)
             if match:
                 return "minecraft:" + match.group(1)
         return None
@@ -694,7 +694,7 @@ class Observer:
                         raise RuntimeError("Окно Minecraft потеряло фокус — управление остановлено.")
                     frame = cv2.cvtColor(np.array(sct.grab(monitor)), cv2.COLOR_BGRA2BGR)
                     coord_text = self.coords(frame)
-                    coord_match = re.search(r"Y=([-+]?\\d+(?:[.,]\\d+)?)", coord_text)
+                    coord_match = re.search(r"Y=([-+]?\d+(?:[.,]\d+)?)", coord_text)
                     if not coord_match:
                         raise RuntimeError("Не удалось прочитать Y по F3. Копание остановлено.")
                     y = float(coord_match.group(1).replace(",", "."))
