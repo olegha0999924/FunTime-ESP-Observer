@@ -131,9 +131,13 @@ class Observer:
         ).pack(anchor="w", pady=(4, 12))
 
         ttk.Label(f, text="Telegram Bot Token").pack(anchor="w")
-        ttk.Entry(f, textvariable=self.token, show="*").pack(fill="x", pady=(2, 8))
+        token_entry = ttk.Entry(f, textvariable=self.token, show="*")
+        token_entry.pack(fill="x", pady=(2, 8))
+        self.enable_paste(token_entry)
         ttk.Label(f, text="Telegram Chat ID").pack(anchor="w")
-        ttk.Entry(f, textvariable=self.chat).pack(fill="x", pady=(2, 8))
+        chat_entry = ttk.Entry(f, textvariable=self.chat)
+        chat_entry.pack(fill="x", pady=(2, 8))
+        self.enable_paste(chat_entry)
 
         line = ttk.Frame(f)
         line.pack(fill="x", pady=6)
@@ -182,6 +186,38 @@ class Observer:
                  "Цветовые маски и область OCR могут потребовать настройки.",
             wraplength=520
         ).pack(anchor="w", pady=4)
+
+    def enable_paste(self, widget):
+        """Добавляет явные сочетания клавиш и контекстное меню для вставки текста."""
+        menu = tk.Menu(widget, tearoff=0)
+        menu.add_command(label="Вырезать", command=lambda: widget.event_generate("<<Cut>>"))
+        menu.add_command(label="Копировать", command=lambda: widget.event_generate("<<Copy>>"))
+        menu.add_command(label="Вставить", command=lambda: widget.event_generate("<<Paste>>"))
+        menu.add_separator()
+        menu.add_command(label="Выделить всё", command=lambda: (
+            widget.select_range(0, "end"),
+            widget.icursor("end")
+        ))
+
+        def show_menu(event):
+            try:
+                menu.tk_popup(event.x_root, event.y_root)
+            finally:
+                menu.grab_release()
+
+        widget.bind("<Button-3>", show_menu)
+        widget.bind("<Control-v>", lambda event: (widget.event_generate("<<Paste>>"), "break")[1])
+        widget.bind("<Control-V>", lambda event: (widget.event_generate("<<Paste>>"), "break")[1])
+        widget.bind("<Control-c>", lambda event: (widget.event_generate("<<Copy>>"), "break")[1])
+        widget.bind("<Control-C>", lambda event: (widget.event_generate("<<Copy>>"), "break")[1])
+        widget.bind("<Control-x>", lambda event: (widget.event_generate("<<Cut>>"), "break")[1])
+        widget.bind("<Control-X>", lambda event: (widget.event_generate("<<Cut>>"), "break")[1])
+        widget.bind("<Control-a>", lambda event: (
+            widget.select_range(0, "end"), widget.icursor("end"), "break"
+        )[2])
+        widget.bind("<Control-A>", lambda event: (
+            widget.select_range(0, "end"), widget.icursor("end"), "break"
+        )[2])
 
     def find_game_window(self):
         try:
