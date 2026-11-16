@@ -526,6 +526,40 @@ class Observer:
         except Exception as exc:
             return "Ошибка распознавания координат: " + str(exc)[:120]
 
+    def target_direction(self, frame):
+        """Оценивает только направление на крупнейшую ESP-область; дальность по одному кадру неизвестна."""
+        h, w = frame.shape[:2]
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        purple = cv2.inRange(hsv, np.array([125, 55, 70]), np.array([170, 255, 255]))
+        orange = cv2.inRange(hsv, np.array([5, 70, 90]), np.array([28, 255, 255]))
+        mask = cv2.bitwise_or(purple, orange)
+
+        # Убираем одиночные шумовые пиксели и ищем отдельные группы подсветки.
+        kernel = np.ones((3, 3), np.uint8)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+        count, labels, stats, centers = cv2.connectedComponentsWithStats(mask, 8)
+        candidates = []
+        for i in range(1, count):
+            area = int(stats[i, cv2.CC_STAT_AREA])
+            if area >= 8:
+                candidates.append((area, centers[i]))
+        if not candidates:
+            return "Направление на ESP не определено (подсветка слишком мала или размыта)."
+
+        # Самая крупная связная область — лишь эвристика, не гарантированно ближайшая цель.
+        area, center = max(candidates, key=lambda item: item[0])
+        dx = float(center[0]) - (w / 2)
+        relative_angle = dx / max(1, w / 2) * 35.0  # приблизительно, FOV по горизонтали принят за 70°.
+        if abs(relative_angle) < 3:
+            side = "почти прямо по центру"
+        elif relative_angle > 0:
+            side = "правее центра"
+        else:
+            side = "левее центра"
+        return (f"Направление на ESP: {side}, примерно {relative_angle:+.1f}° "
+                f"от направления взгляда (оценка при FOV 70°). "
+                "Расстояние неизвестно — точные координаты объекта вычислить нельзя.")
+
     def send(self, config, msg, photo):
         token, chat = config["token"], config["chat"]
         if not token or not chat:
@@ -571,8 +605,9 @@ class Observer:
                         cv2.imwrite(str(path), frame, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
                         message = (
                             "Обнаружена ESP-подсветка\n"
-                            + self.coords(frame)
-                            + f"\n{datetime.now():%Y-%m-%d %H:%M:%S}\nПикселей: {count}"
+                            + "Координаты игрока: " + self.coords(frame)
+                            + "\\n" + self.target_direction(frame)
+                            + f"\\n{datetime.now():%Y-%m-%d %H:%M:%S}\\nESP-пикселей: {count}"
                         )
                         threading.Thread(
                             target=self.send,
