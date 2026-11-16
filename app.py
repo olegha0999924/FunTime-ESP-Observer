@@ -840,41 +840,52 @@ class Observer:
         self.status.set("Остановка…")
 
     def coords(self, frame):
-        """Read only the labelled XYZ line from Minecraft's F3 overlay."""
+        """Read Minecraft F3 XYZ using several OCR crops and preprocessing modes."""
         if not TESSERACT_PATH:
             return "Tesseract OCR не найден. Установи его или добавь в PATH."
         try:
             h, w = frame.shape[:2]
-            # В Minecraft F3 строка XYZ находится в левом верхнем блоке отладки.
-            crop = frame[:int(h * .48), :int(w * .48)]
+            # XYZ находится в левой колонке F3. Берём с запасом по ширине/высоте,
+            # поскольку разрешение, масштаб интерфейса и размер шрифта различаются.
+            crop = frame[:int(h * .62), :int(w * .68)]
             gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
             gray = cv2.resize(gray, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
+            contrast = cv2.convertScaleAbs(gray, alpha=1.9, beta=30)
             variants = [
-                cv2.convertScaleAbs(gray, alpha=1.8, beta=25),
-                cv2.bitwise_not(cv2.convertScaleAbs(gray, alpha=1.8, beta=25)),
+                contrast,
+                cv2.bitwise_not(contrast),
+                cv2.threshold(contrast, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1],
             ]
             number = r"[-+]?\d{1,7}(?:[.,]\d+)?"
-            # Обязательно требуем метку XYZ: случайные три числа не считаются координатами.
-            patterns = [
-                re.compile(rf"\bXYZ\b\s*:?\s*({number})\s*[/,; ]+\s*({number})\s*[/,; ]+\s*({number})", re.IGNORECASE),
-                re.compile(rf"\bXYZ\b\s*:?\s*({number})\s+({number})\s+({number})", re.IGNORECASE),
-            ]
+            # Tesseract иногда вставляет пробелы внутрь метки XYZ и меняет разделители.
             ocr_text = []
             for image in variants:
-                for psm in (6, 11):
+                for psm in (6, 11, 12):
                     txt = pytesseract.image_to_string(
                         image,
-                        config=f"--psm {psm} -c tessedit_char_whitelist=XYZxyz0123456789-+.,/:; "
+                        config=f"--oem 3 --psm {psm} -c preserve_interword_spaces=1"
                     )
                     ocr_text.append(txt)
-                    for pattern in patterns:
-                        match = pattern.search(txt)
-                        if match:
-                            values = [part.replace(",", ".") for part in match.groups()]
-                            return f"X={values[0]}, Y={values[1]}, Z={values[2]}"
-            return "XYZ-строка не найдена. OCR: " + " | ".join(
-                " ".join(t.split())[:180] for t in ocr_text[:2]
-            )
+                    normalized = txt.replace("×", "X").replace("|", "/")
+                    normalized = re.sub(r"X\s*Y\s*Z", "XYZ", normalized, flags=re.IGNORECASE)
+                    # Сначала ищем стандартную строку XYZ с любыми обычными разделителями.
+                    match = re.search(
+                        rf"XYZ\s*[:=]?\s*({number})\s*[/,; ]+\s*({number})\s*[/,; ]+\s*({number})",
+                        normalized, re.IGNORECASE
+                    )
+                    if match:
+                        values = [part.replace(",", ".") for part in match.groups()]
+                        return f"X={values[0]}, Y={values[1]}, Z={values[2]}"
+                    # Иногда OCR переносит XYZ и значения на следующую строку.
+                    match = re.search(
+                        rf"XYZ[\s:=-]*({number})[\s/,;]+({number})[\s/,;]+({number})",
+                        normalized, re.IGNORECASE
+                    )
+                    if match:
+                        values = [part.replace(",", ".") for part in match.groups()]
+                        return f"X={values[0]}, Y={values[1]}, Z={values[2]}"
+            diagnostic = " | ".join(" ".join(t.split())[:220] for t in ocr_text[:3])
+            return "XYZ-строка не распознана. Текст OCR: " + diagnostic
         except pytesseract.pytesseract.TesseractNotFoundError:
             return "Tesseract OCR не найден по пути: " + str(TESSERACT_PATH)
         except Exception as exc:
